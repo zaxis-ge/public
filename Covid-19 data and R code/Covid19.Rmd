@@ -1,0 +1,285 @@
+---
+title: "covid-19 script"
+author: "Irakli Kavtaradze"
+date: "3/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+საქართველოს მოსახლეობის ასაკობრივი განაწილება გვაჩვენებს რამდენი მოწყვლადი ადამიანი შეიძლება იყოს covid-19-თან დაკავშირებით, მხოლოდ ასაკის მიხედვით. სახელმწიფო სერვისებში დასაქმებული ექთნების რაოდენობა ამ მოწყვლად ჯგუფს შეგვიძლია შევუფარდოთ, რომ გავიგოთ რამდენად გადატვირთული იქნება სამედიცინო პერსონალი ეპიდემიის დროს. 
+
+```{r population pyramid, echo = FALSE}
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpol)
+library(stringr)
+library(extrafont)
+library(ggthemes)
+
+#მონაცემების დამატება
+pyramid_data <- read_csv("data/population_pyramid.csv")
+#ცვლადების ტიპების შემოწმება
+str(pyramid_data)
+#ასაკის ცვლადის კატეგორიულ ცვლადად გადაკეთება
+pyramid_data$age <- as.character(pyramid_data$age)
+#სრული რაოდენობის სვეტის მოშორება
+pyramid_data <- pyramid_data %>%
+  select(-total)
+#მონაცემების დატაფრეიმად გარდაქმნა
+pyramid_data <- as_tibble(pyramid_data)
+#გენდერის ცვლადის დამატება ორი ცვლადის გაერთიანებით
+pyramid_data <- pyramid_data %>%
+  gather(key = gender, value = numbers, -age)
+#პოპულაციის რაოდენობა ათასებში გადავიყვანოთ
+pyramid_data <- pyramid_data %>%
+  mutate(numbers = numbers/1000)
+#5-9 შეცვლა 05-09-ით
+pyramid_data$age <- pyramid_data$age %>%
+  str_replace("1-4", "01-04")
+pyramid_data$age <- pyramid_data$age %>%
+  str_replace("5-9","05-09")
+
+#ფონტების ჩამოტვირთვა (თუ ამოტვირთვაა?)
+#font_import()
+#loadfonts()
+#fonts()[grep("Awesome", fonts())]
+# | ეს waffle chart-ისთვის იყო, მაგრამ აღარაა საჭირო
+#გრაფის აგება
+pyramid_data %>%
+  ggplot(aes(x = age, y = numbers, fill = gender)) +
+  geom_bar(data = subset(pyramid_data, gender == "female"), stat = "identity")+
+  geom_bar(data = subset(pyramid_data, gender == "male"), aes(y = numbers *(-1)), stat = "identity")+
+  scale_y_continuous(labels = abs, limits = max(pyramid_data$numbers) * c(-1,1)) + #sbs ნიშნავს "აბსოლუტურს" და მინუსის მოსაშორებლად გვჭირდება
+  coord_flip()+
+  labs(x= "",
+       y= "პოპულაცია (ათასი კაცი)",
+       fill = "სქესი"
+       )+
+  theme_tufte()+
+  theme(text = element_text(family = "Sylfaen"),
+    panel.grid.major = element_blank()
+  )+
+  scale_fill_discrete(labels=c("ქალი","კაცი"))+
+  scale_fill_manual(values=c("#d23f67","#505050"))
+  
+#ჰოსპიტალიზაციის საჭიროების მქონე ადამიანთა რაოდენობა ასაკობრივ ჭრილში
+#ახალი დატაფრეიმის შექმნა სადაც პროცენტული მაჩვენებელია ასახული
+hospitalEstimate <- data.frame(age = c("0-9","10-19","20-29","30-39","40-49","50-59","60-69","70-79",">80"))
+
+```
+
+ჩინეთის მონაცემებზე ჩატარებული კვლევის მიხედვით (Verity, R. 2020) რისკ ჯგუფში მყოფი ინფიცირებული ადამიანების 42.8% საჭიროებდა ჰოსპიტალიზაციას. თუ დავუშვებთ, რომ რისკ ჯგუფის 10% შეიძლება დაინფიცირდეს, მაშინ შესაბამისი რაოდენობის 42.8%-ს დასჭირდება ჰოსპიტალიზაცია. ჰოსპიტალიზაცია შესაბამისი რაოდენობის საწოლებსა და ექთნებს საჭიროებს. 
+```{r beds and medical personnel}
+beds <- 19600 #2018 წლის მონაცემებით, დამატებული 3600 საწოლი კერძო კლინიკებიდან (წყარო: shorturl.at/rGOQ6)
+nurses <- 18011 #2018 წლის მონაცემებით
+
+#დაავადებების ტიპების მიხედვით ავადობის მაჩვენებლები
+diabetes <- 232000 #2017 წლის დიაბეტის საერთაშორისო ფედერაციის მე-8 ატლასის მიხედვით. ციტირებულია NCDC-ის რეპორტში.
+cancer <- 9600 #2018 წლის მონაცემები
+cardio <- 150300 #2018 წლის მონაცემები
+respiratory <- 641700 #2018 წლის მონაცემები
+
+library(waffle) #ვეიფლ ჩარტის გასაკეთებლად
+library(hrbrthemes)
+
+#მოსახლეობის ინფიცირების სავარაუდო რაოდენობა და ჰოსპიტალიზაციის საჭიროების მქონე პაციენტების გამოთვლა (კვლევის შესაბამისად)
+severe_cases <- (0+1+49+124+154+222+201+133+51)/(13+50+437+733+743+790+560+263+76) #პირველი ჯამი მწვავე ქეისებია, მეორე ჯამი ქეისების საერთო რაოდენობა, ასაკობრივი ჯგუფების მიხედვით.
+#რამდენი ადამიანის ჰოსპიტალიზაცია იქნება საჭირო, თუკი მოსახლეობის 5% დაინფიცირდება
+population <- sum(pyramid_data$numbers) #მთლიანი პოპულაციის გამოთვა ყველა ასაკობრივ ჯგუფში შემავალი ადამიანის რაოდენობის დაჯამებით
+
+#რამდენი იქნება ჰოსპიტალიზაციის საჭიროება, თუკი მოსახლეობის 5% დაინფიცირდება
+population*0.05*severe_cases
+#რამდენი იქნება ჰოსპიტალიზაციის საჭიროება, თუკი მოსახლეობის 10% დაინფიცირდება
+population*0.1*severe_cases
+#რამდენი იქნება ჰოსპიტალიზაციის საჭიროება, თუკი მოსახლეობის 15% დაინფიცირდება
+population*0.15*severe_cases
+#რამდენი იქნება ჰოსპიტალიზაციის საჭიროება, თუკი მოსახლეობის 20% დაინფიცირდება
+population*0.2*severe_cases
+
+
+
+#როგორი იქნება საწოლების, ექთნებისა და ჰოსპიტალიზაციის საჭიროების მქონე ინფიცირებულების რაოდენობა, თუკი მოსახლეობის 5% დაინფიცირდება ვირუსით
+waffle(c(infected = 47.495, nurses = 18.011, beds = 19.600), rows = 10, size = 2, colors = c("#e35f5f","#8ed9f5","#a19e9a"),
+       legend_pos = "bottom",   title = "If 5% of the population gets infected with Covid-19")
+#როგორი იქნება საწოლების, ექთნებისა და ჰოსპიტალიზაციის საჭიროების მქონე ინფიცირებულების რაოდენობა, თუკი მოსახლეობის 10% დაინფიცირდება ვირუსით
+waffle(c(infected = 94.991, nurses = 18.011, beds = 19.600), rows = 10, size = 2, colors = c("#e35f5f","#8ed9f5","#a19e9a"),
+       legend_pos = "bottom",   title = "If 10% of the population gets infected with Covid-19")
+#როგორი იქნება საწოლების, ექთნებისა და ჰოსპიტალიზაციის საჭიროების მქონე ინფიცირებულების რაოდენობა, თუკი მოსახლეობის 15% დაინფიცირდება ვირუსით
+waffle(c(infected = 142.487, nurses = 18.011, beds = 19.600), rows = 10, size = 2, colors = c("#e35f5f","#8ed9f5","#a19e9a"),
+       legend_pos = "bottom",   title = "If 15% of the population gets infected with Covid-19")
+#როგორი იქნება საწოლების, ექთნებისა და ჰოსპიტალიზაციის საჭიროების მქონე ინფიცირებულების რაოდენობა, თუკი მოსახლეობის 20% დაინფიცირდება ვირუსით
+waffle(c(infected = 189.983, nurses = 18.011, beds = 19.600), rows = 10, size = 2, colors = c("#e35f5f","#8ed9f5","#a19e9a"),
+       legend_pos = "bottom",   title = "If 20% of the population gets infected with Covid-19")
+
+#მოწყვლად ასაკობრივ ჯგუფებში არსებული ადამიანების რაოდენობის გამოთვლა 
+risk_age <- pyramid_data[14:19,] #60  წელს გადაცილებულთა სტატისტიკა
+
+  
+
+
+
+
+```
+
+```{r nCovid2019}
+#remotes::install_github("GuangchuangYu/nCov2019", dependencies = TRUE, force = TRUE) #კოვიდის შესახებ პაკეტის ინსტალაცია. მოიცავს ისტორიულ მონაცემებს კოვიდის შესახებ
+library(nCov2019) #ჩატვირთვა
+covid <- load_nCov2019(lang = 'en') #ბოლო ინფორმაცია ჩინეთში კოვიდის გავრცელების შესახებ. დეტალებისთვის ცალკე კოდების გამოყენებაა საჭირო
+
+summary(covid)
+
+View(covid["global"] %>%
+  filter(country == "Italy"))
+
+library(gganimate)
+library(tweenr)
+
+
+library(readxl)
+library(httr)
+
+#საქართველოს (და მსოფლიოს) მომაცემების ჩამოტვირთვა European Centre for Disease Prevention and Control-ის საიტიდან
+url <- paste("https://www.ecdc.europa.eu/sites/default/files/documents/COVID-19-geographic-disbtribution-worldwide-",format(Sys.time(), "%Y-%m-%d"), ".xlsx", sep = "") #მისამართის ჩამოტვირთვა. განმეორებით შეიძლება განახლებული ვერსიის
+#ფაილის დროებით ჩამოტვირთვა
+GET(url, authenticate(":", ":", type="ntlm"), write_disk(tf <- tempfile(fileext = ".xlsx")))
+
+#მონაცემების ჩატვირთვა “R”-ში
+covidworld <- read_excel(tf) #ლოკალური მისამართი სადაც დოკუმენტი უნდა შევინახოთ
+
+library(lubridate)#თარიღებთან სამუშაოდ
+
+covidworld$dateRep <- ymd(covidworld$dateRep) #თარიღების date-ის ფორმატში გადაყვანა. აუცილებელია ფილტრაციისთვის
+covidworld$countriesAndterritories <- as.factor(covidworld$countriesAndTerritories) #ქვეყნების ფაქტორში გადაყვანა
+covidworld <- covidworld %>%
+  rename(country = countriesAndTerritories) #უფრო მოკლე სახელი ქვეყნების სვეტისთვის
+ 
+covid_geo <- covidworld %>%
+  filter(country == "Georgia") #საქართველოს მონაცემების გამოყოფა
+
+#ინციდენტობის ნახვა საქართველოში
+plot <- covid_geo %>%
+  filter(dateRep > "2020-02-20") %>%
+  ggplot(aes(x=dateRep, y=cases, fill = "red"))+
+  geom_bar(stat = "identity")+
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(family = "Sylfaen"),
+        panel.grid.major = element_blank())+
+  scale_x_date(date_breaks = "3 days", date_labels = "%m-%d")+
+  labs(title = "Covid-19-ის ინციდენტობა საქართველოში",
+       y = "შემთხვევების რაოდენობა",
+       x= "") +
+  transition_states(dateRep) +
+  ease_aes("cubic-in-out") +
+  shadow_mark() #წინა ფრეიმები რჩება მომდევნო ფრეიმებზე
+
+animate(plot, end_pause = 100, nframes = 1000, fps =50, width = 1500, height = 1200)
+
+```
+
+საწოლების რაოდენობა ქვეყნების მიხედვით
+
+```{r number of beds}
+world_beds <- read_csv("data/beds.csv") #OECD, EU, Euro Area, G7 და G20 ქვეყნების მონაცემები, ყოველ 1000 კაცზე
+
+# მხოლოდ იმ რიგებს ვტოვებ, რომლებიც თითოეული ქვეყნისთვის უახლეს ინფორმაციას შეიცავს
+ world_beds <- world_beds %>%
+  filter(SUBJECT == "TOT") %>% 
+  group_by(LOCATION) %>%
+  select(LOCATION, TIME, Value) %>% 
+  filter(TIME == max(TIME)) %>% 
+  arrange(Value)
+
+# რამდენი საწოლია ყოველ 1000 კაცზე
+19600/sum(pyramid_data$numbers)
+
+# ვამატებ საქართველოს ნიშნულს და კატეგორიულ ცვლადს იმის აღსანიშნად კონკრეტულ ქვეყანას უფრო მეტი საწოლი აქვს თუ ნაკლები (რაც ფერით კოდირებაში დაგვეხმარება). ლოლიპოპ ჩარტისთვის ვამზადებ
+world_beds <- world_beds %>% 
+  mutate(Georgia = 5.26,
+         Above = ifelse(Value > 5.26, TRUE, FALSE))
+
+#ლოლიპოპ ჩარტის აგება
+world_beds <- world_beds %>% 
+  arrange(Value) %>% #დაღმავალი წყობა რაოდენობის მიხედვით
+  mutate(country = factor(LOCATION, levels = .$LOCATION))
+  
+library(RColorBrewer)
+library(wesanderson)
+  
+# ლოლიპოპი  
+world_beds %>% 
+  ggplot(aes(x = Value, y = country, color = Above, label = Value)) +
+  geom_segment(aes(x = Georgia, y = country, xend = Value, yend = country), linetype = "dashed", colour = "grey50", size = 1, alpha = 0.6) +
+  geom_point(size = 7.5) +
+  geom_vline(xintercept = 5.26, colour = "red", alpha = 0.4)+
+  scale_x_continuous(limits = c(0, 14), breaks = seq(0, 14, by = 1)) +
+  geom_text(colour = "white", size = 2.5) +
+  theme_tufte() +
+  theme(axis.ticks = element_blank()) +
+  scale_color_manual(values = wes_palette(n = 2, name = "Royal1"))
+  
+
+#საქართველოს ეთქნების რაოდენობის შედარება სხვა ქვეყნის ექთნებთან
+geo_nurses <- nurses/sum(pyramid_data$numbers)
+
+#მონაცემების დამატება ექთების რაოდენობასთან დაკავშირებით, ყოელ 1000 მოსახლეზე
+country_nurses <- read_csv("data/nurses.csv")
+
+#მონაცემების გასუფთავება ვიზუალიზაციისთვის
+country_nurses <- country_nurses %>% 
+  select(LOCATION,TIME,Value) %>% 
+  group_by(LOCATION) %>% 
+  filter(TIME == max(TIME)) %>% #ბოლო მონაცემების ასარჩევად
+  arrange(Value) %>% 
+  mutate(geo = geo_nurses,
+         above = ifelse(Value > geo_nurses, TRUE, FALSE),
+         country = factor(LOCATION, levels = .$LOCATION))
+
+#ლოლიპოპის აგება
+country_nurses %>% 
+  ggplot(aes(x = Value, y = country, colour = above, label = Value)) +
+  geom_segment(aes(x = geo, y = country, xend = Value, yend = country), linetype = "dashed", colour = "grey50", size = 1, alpha = 0.6) +
+  geom_point(size = 7.5) +
+  geom_vline(xintercept = 4.83) +
+  scale_x_continuous(limits = c(0,18), breaks = seq(0,18, by = 2)) +
+  geom_text(colour = "white", size = 2.5) +
+  scale_colour_manual(values = wes_palette(n = 2, name = "Royal1")) +
+  theme(axis.ticks = element_blank(),
+        legend.position = "none") +
+  theme_tufte()
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
